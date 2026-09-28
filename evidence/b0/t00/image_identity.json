@@ -1,0 +1,39 @@
+{
+  "host": "192.168.10.29",
+  "observed_at": "2026-09-28T04:36:13-04:00",
+  "launch_script": "/home/hhtele/ninfer-4090/launch/production-18343.sh",
+  "launch_image_line": "IMAGE=ninfer-4090:prepare-detail",
+  "container": {
+    "name": "ninfer-4090-prod",
+    "status": "running",
+    "config_image": "ninfer-4090:prepare-detail",
+    "image_id": "sha256:9c2dec8b9ff087d178f72b68251ff7ff18c77330833eaade5b40bf4c49eb312b",
+    "started_at": "2026-09-24T03:33:49.965347765Z"
+  },
+  "images": {
+    "ninfer-4090:prepare-detail": {
+      "id": "sha256:9c2dec8b9ff087d178f72b68251ff7ff18c77330833eaade5b40bf4c49eb312b",
+      "created": "2026-09-21T23:45:43.302726788-04:00",
+      "size": 3553893842
+    },
+    "ninfer-4090:44a2c6c": {
+      "id": "sha256:2e62f8933bcf08fb2157549036b2ec781b0129d851fbb28f298cb013dcf690fc",
+      "created": "2026-09-06T22:29:17.291758142-04:00",
+      "size": 3553885650
+    }
+  },
+  "source_tree_match": {
+    "local_repo": "output/qwen38-27b-4090-ninfer/ninfer-4090",
+    "remote_tree": "/home/hhtele/ninfer-4090",
+    "remote_git": "not a git repository",
+    "compared_files": 14,
+    "sha256_mismatches": 0,
+    "note": "11 dirty overlay files plus untracked Dockerfile.sm89-nobake, tokenizer.cpp, and tokenizer.h match byte for byte. tokenizer.cpp and tokenizer.h are unmodified relative to 44a2c6c."
+  },
+  "host_compiler_for_later_cpu_tests": {
+    "c++": "Debian g++ 12.2.0",
+    "cmake": "3.25.1",
+    "note": "Host cmake is older than the project's cmake_minimum_required 3.28. The running image was built from Dockerfile.sm89-nobake on nvidia/cuda:13.2.0-cudnn-devel-ubuntu24.04. This record does not re-inspect the compiler inside that image."
+  },
+  "service_touched": false
+}

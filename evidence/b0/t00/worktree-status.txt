@@ -1,0 +1,12 @@
+ M include/ninfer/types.h
+ M src/serve/generation_service.cpp
+ M src/serve/generation_service.h
+ M src/serve/http_server.cpp
+ M src/serve/request.h
+ M src/serve/request_log.cpp
+ M src/serve/request_log.h
+ M src/serve/responses_http.cpp
+ M src/targets/qwen3_8/export/ninfer/targets/qwen3_8/prepared_prompt.h
+ M src/targets/qwen3_8/impl/frontend/frontend.cpp
+ M tests/test_request_log.cpp
+?? Dockerfile.sm89-nobake

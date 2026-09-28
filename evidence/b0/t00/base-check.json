@@ -1,0 +1,14 @@
+{
+  "status": "PASS",
+  "scope": "BASE_COMMIT_AND_BLOBS_ONLY",
+  "errors": [],
+  "warnings": [
+    "Working tree changes exist; this check does not certify the diagnostic image or overlay."
+  ],
+  "base_commit": "44a2c6c3392c9d51e76a895ed97bf1867530d252",
+  "head": "44a2c6c3392c9d51e76a895ed97bf1867530d252",
+  "subject": "feat(engine): measure board energy and attribute it to prefill and decode",
+  "checked_unique_blobs": 13,
+  "checked_line_regions": 4,
+  "working_tree_dirty": true
+}

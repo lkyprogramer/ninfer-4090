@@ -1,0 +1,347 @@
+diff --git a/include/ninfer/types.h b/include/ninfer/types.h
+index 783e48c..05ae57d 100644
+--- a/include/ninfer/types.h
++++ b/include/ninfer/types.h
+@@ -403,9 +403,20 @@ private:
+     RequestErrorKind kind_;
+ };
+ 
++// Frontend::prepare sub-timers. Text chat fills all of them. Vision leaves tokenize_seconds
++// negative and folds processor time into render_seconds.
++struct FrontendPrepareTiming {
++    double convert_seconds   = 0.0;
++    double render_seconds    = 0.0;
++    double tokenize_seconds  = 0.0;
++    double positions_seconds = 0.0;
++    std::uint64_t rendered_chars = 0;
++};
++
+ struct PromptSummary {
+     std::uint32_t prompt_tokens = 0;
+     bool has_media              = false;
++    FrontendPrepareTiming frontend;
+ };
+ 
+ enum class FinishReason : std::uint8_t {
+diff --git a/src/serve/generation_service.cpp b/src/serve/generation_service.cpp
+index 888b611..af185f2 100644
+--- a/src/serve/generation_service.cpp
++++ b/src/serve/generation_service.cpp
+@@ -384,19 +384,31 @@ PreparedRequest GenerationService::prepare(const GenerationRequest& request,
+ 
+     try {
+         std::size_t remaining_media_bytes = options_.max_request_bytes;
++        const auto convert_started        = Clock::now();
+         ninfer::PromptInput input =
+             to_prompt_input(request, semantics, [&](const ContentPart& part) {
+                 return acquire_media(part, prepared.lifetime->deadline, is_cancelled,
+                                      remaining_media_bytes);
+             });
++        prepared.prepare_serve_convert_seconds =
++            std::chrono::duration<double>(Clock::now() - convert_started).count();
+         check_preparation_control(prepared.lifetime->deadline, is_cancelled);
+         ninfer::PreparedPrompt prompt = engine_->prepare(std::move(input));
+         check_preparation_control(prepared.lifetime->deadline, is_cancelled);
+-        prepared.prompt_tokens = static_cast<int>(prompt.summary().prompt_tokens);
+-        prepared.prepare_seconds =
+-            std::chrono::duration<double>(Clock::now() - prepared.lifetime->started).count();
++        const ninfer::PromptSummary summary = prompt.summary();
++        prepared.prompt_tokens = static_cast<int>(summary.prompt_tokens);
++        prepared.prepare_frontend_convert_seconds = summary.frontend.convert_seconds;
++        prepared.prepare_render_seconds           = summary.frontend.render_seconds;
++        prepared.prepare_tokenize_seconds         = summary.frontend.tokenize_seconds;
++        prepared.prepare_positions_seconds        = summary.frontend.positions_seconds;
++        prepared.rendered_chars                   = summary.frontend.rendered_chars;
++        const auto submit_started = Clock::now();
+         prepared.generation = engine_->submit(std::move(prompt), std::move(request_options),
+                                               prepared.lifetime->deadline, std::move(host_input));
++        prepared.prepare_submit_seconds =
++            std::chrono::duration<double>(Clock::now() - submit_started).count();
++        prepared.prepare_seconds =
++            std::chrono::duration<double>(Clock::now() - prepared.lifetime->started).count();
+         prepared.sampling   = prepared.generation.resolved_sampling();
+     } catch (const ApiException&) { throw; } catch (const ninfer::RequestError& exception) {
+         throw_request_error(exception);
+@@ -467,6 +479,13 @@ GenerationOutcome GenerationService::run(PreparedRequest& prepared, const Stream
+     outcome.session_digest    = std::move(result.session_digest);
+ 
+     outcome.metrics.prepare_seconds = prepared.prepare_seconds;
++    outcome.metrics.prepare_serve_convert_seconds    = prepared.prepare_serve_convert_seconds;
++    outcome.metrics.prepare_frontend_convert_seconds = prepared.prepare_frontend_convert_seconds;
++    outcome.metrics.prepare_render_seconds           = prepared.prepare_render_seconds;
++    outcome.metrics.prepare_tokenize_seconds         = prepared.prepare_tokenize_seconds;
++    outcome.metrics.prepare_positions_seconds        = prepared.prepare_positions_seconds;
++    outcome.metrics.prepare_submit_seconds           = prepared.prepare_submit_seconds;
++    outcome.metrics.rendered_chars                   = prepared.rendered_chars;
+     outcome.metrics.ttft_seconds =
+         prepared.prepare_seconds +
+         std::max(0.0, result.timings.first_token_seconds - result.timings.prepare_seconds);
+diff --git a/src/serve/generation_service.h b/src/serve/generation_service.h
+index 521fb1a..b4843e5 100644
+--- a/src/serve/generation_service.h
++++ b/src/serve/generation_service.h
+@@ -24,6 +24,13 @@ struct MediaInputCapacity;
+ 
+ struct GenerationMetrics {
+     double prepare_seconds = 0.0;
++    double prepare_serve_convert_seconds    = 0.0;
++    double prepare_frontend_convert_seconds = 0.0;
++    double prepare_render_seconds           = 0.0;
++    double prepare_tokenize_seconds         = 0.0;
++    double prepare_positions_seconds        = 0.0;
++    double prepare_submit_seconds           = 0.0;
++    std::uint64_t rendered_chars            = 0;
+     double ttft_seconds    = 0.0;
+     double vision_seconds  = 0.0;
+     // Engine-side wait between submission and admission, and the continuation import that
+@@ -76,6 +83,13 @@ struct PreparedRequest {
+     ninfer::GenerationHandle generation;
+     ninfer::ResolvedSamplingParameters sampling;
+     double prepare_seconds                 = 0.0;
++    double prepare_serve_convert_seconds    = 0.0;
++    double prepare_frontend_convert_seconds = 0.0;
++    double prepare_render_seconds           = 0.0;
++    double prepare_tokenize_seconds         = 0.0;
++    double prepare_positions_seconds        = 0.0;
++    double prepare_submit_seconds           = 0.0;
++    std::uint64_t rendered_chars            = 0;
+     int prompt_tokens                      = 0;
+     bool include_usage                     = false;
+     bool tool_capable                      = false;
+diff --git a/src/serve/http_server.cpp b/src/serve/http_server.cpp
+index 43ccc4e..10feaac 100644
+--- a/src/serve/http_server.cpp
++++ b/src/serve/http_server.cpp
+@@ -1130,6 +1130,7 @@ void HttpServer::handle_chat_completions(const httplib::Request& req, httplib::R
+         RequestLimits limits;
+         limits.default_max_tokens = options_.default_max_tokens;
+         request                   = parse_chat_completion_request(body, limits);
++        request.body_bytes        = req.body.size();
+         request.adapter           = require_model(request.model);
+         prepared                  = service_->prepare(
+             request, [&req] { return req.is_connection_alive && !req.is_connection_alive(); });
+@@ -1317,8 +1318,9 @@ void HttpServer::handle_messages(const httplib::Request& req, httplib::Response&
+         // The Anthropic endpoint accepts any `model` string (Claude Code sends real
+         // Claude model names) and echoes it back; it never 404s on model id. A string that
+         // does name a served model still selects it, so adapters are reachable here too.
+-        request         = parse_messages_request(body, limits);
+-        request.adapter = resolve_model(request.model).value_or(std::string());
++        request            = parse_messages_request(body, limits);
++        request.body_bytes = req.body.size();
++        request.adapter    = resolve_model(request.model).value_or(std::string());
+         prepared        = service_->prepare(
+             request, [&req] { return req.is_connection_alive && !req.is_connection_alive(); });
+     } catch (const ApiException& e) {
+diff --git a/src/serve/request.h b/src/serve/request.h
+index 51c9744..0d4dc55 100644
+--- a/src/serve/request.h
++++ b/src/serve/request.h
+@@ -187,6 +187,9 @@ struct GenerationRequest {
+     bool max_tokens_set = false;
+     bool stream         = false;
+     bool include_usage  = false;
++    // Raw HTTP body size, set by the server before prepare. 0 when the request did not come
++    // from an HTTP body (tests, token-count helpers).
++    std::uint64_t body_bytes = 0;
+     std::optional<bool> enable_thinking; // non-standard extension; falls back to server default
+     std::optional<RequestedReasoningEffort> reasoning_effort;
+     std::string reasoning_effort_param = "reasoning_effort";
+diff --git a/src/serve/request_log.cpp b/src/serve/request_log.cpp
+index 3a21152..3dc194a 100644
+--- a/src/serve/request_log.cpp
++++ b/src/serve/request_log.cpp
+@@ -223,6 +223,10 @@ Json request_json(const RequestLogContext& context) {
+                 {"model", context.model},
+                 {"stream", context.stream},
+                 {"message_count", context.message_count},
++                {"content_chars", context.content_chars},
++                {"max_message_chars", context.max_message_chars},
++                {"rendered_chars", context.rendered_chars},
++                {"body_bytes", context.body_bytes},
+                 {"requested_output_tokens", context.requested_output_tokens},
+                 {"requested_output_tokens_source",
+                  context.requested_output_tokens_client_set ? "client" : "server_default"},
+@@ -378,6 +382,17 @@ RequestLogContext make_request_log_context(std::uint64_t id, std::string x_reque
+     context.stream                             = request.stream;
+     context.prompt_tokens                      = prepared.prompt_tokens;
+     context.message_count                      = request.messages.size();
++    context.body_bytes                         = request.body_bytes;
++    context.rendered_chars                     = prepared.rendered_chars;
++    for (const ChatTurn& turn : request.messages) {
++        std::uint64_t chars = turn.reasoning_content.size() + turn.tool_call_id.size();
++        for (const ContentPart& part : turn.content) { chars += part.text.size(); }
++        for (const ToolCall& call : turn.tool_calls) {
++            chars += call.name.size() + call.arguments_json.size();
++        }
++        context.content_chars += chars;
++        context.max_message_chars = std::max(context.max_message_chars, chars);
++    }
+     context.requested_output_tokens            = request.max_tokens;
+     context.requested_output_tokens_client_set = request.max_tokens_set;
+     context.tool_count                         = request.tools.size();
+@@ -681,7 +696,18 @@ std::string format_request_done_json(const std::string& server_instance_id, std:
+                               static_cast<int>(outcome.metrics.prefix_cache_hit_tokens))},
+              {"prefix_cache_hit_tokens", outcome.metrics.prefix_cache_hit_tokens},
+              {"prefix_reuse_path", prefix_reuse_path_name(outcome.metrics.prefix_reuse_path)},
+-             {"tool_call_count", outcome.tool_calls.size()}};
++             {"tool_call_count", outcome.tool_calls.size()},
++             {"prepare_tokens_per_s",
++              outcome.metrics.prepare_seconds > 0.0
++                  ? static_cast<double>(outcome.prompt_tokens) / outcome.metrics.prepare_seconds
++                  : 0.0}};
++    record["prepare_detail"] =
++        Json{{"serve_convert", outcome.metrics.prepare_serve_convert_seconds},
++             {"frontend_convert", outcome.metrics.prepare_frontend_convert_seconds},
++             {"template_render", outcome.metrics.prepare_render_seconds},
++             {"tokenize", outcome.metrics.prepare_tokenize_seconds},
++             {"positions_identity", outcome.metrics.prepare_positions_seconds},
++             {"engine_submit", outcome.metrics.prepare_submit_seconds}};
+     // queue + restore + prefill decompose the engine-side part of ttft. prepare and vision are
+     // frontend work that precedes submission.
+     record["timings_seconds"] = Json{{"prepare", outcome.metrics.prepare_seconds},
+diff --git a/src/serve/request_log.h b/src/serve/request_log.h
+index f093d42..59a4655 100644
+--- a/src/serve/request_log.h
++++ b/src/serve/request_log.h
+@@ -17,7 +17,7 @@
+ 
+ namespace ninfer::serve {
+ 
+-inline constexpr int kRequestLogSchemaVersion = 19;
++inline constexpr int kRequestLogSchemaVersion = 20;
+ inline constexpr const char* kRequestLogArtifactType = "ninfer_serve_request_log";
+ 
+ struct RequestLogContext {
+@@ -28,6 +28,10 @@ struct RequestLogContext {
+     bool stream                             = false;
+     int prompt_tokens                       = 0;
+     std::size_t message_count               = 0;
++    std::uint64_t content_chars             = 0;
++    std::uint64_t max_message_chars         = 0;
++    std::uint64_t rendered_chars            = 0;
++    std::uint64_t body_bytes                = 0;
+     int requested_output_tokens             = 0;
+     bool requested_output_tokens_client_set = false;
+     std::size_t tool_count                  = 0;
+diff --git a/src/serve/responses_http.cpp b/src/serve/responses_http.cpp
+index f706b2f..928312a 100644
+--- a/src/serve/responses_http.cpp
++++ b/src/serve/responses_http.cpp
+@@ -193,8 +193,9 @@ void HttpServer::handle_responses(const httplib::Request& req, httplib::Response
+         limits.default_max_tokens = options_.default_max_tokens;
+         Json body                 = parse_json_body(req);
+         resolve_response_item_references(body, response_store_);
+-        request                   = parse_responses_request(body, limits);
+-        request.generation.adapter = require_model(request.generation.model);
++        request                     = parse_responses_request(body, limits);
++        request.generation.body_bytes = req.body.size();
++        request.generation.adapter  = require_model(request.generation.model);
+         if (request.previous_response_id) {
+             const std::shared_ptr<const StoredResponse> previous =
+                 response_store_.get(*request.previous_response_id);
+diff --git a/src/targets/qwen3_8/export/ninfer/targets/qwen3_8/prepared_prompt.h b/src/targets/qwen3_8/export/ninfer/targets/qwen3_8/prepared_prompt.h
+index f355971..5b77633 100644
+--- a/src/targets/qwen3_8/export/ninfer/targets/qwen3_8/prepared_prompt.h
++++ b/src/targets/qwen3_8/export/ninfer/targets/qwen3_8/prepared_prompt.h
+@@ -64,6 +64,11 @@ struct PromptIdentity {
+ 
+ struct PrepareStats {
+     double seconds                = 0.0;
++    double convert_seconds        = 0.0;
++    double render_seconds         = 0.0;
++    double tokenize_seconds       = 0.0;
++    double positions_seconds      = 0.0;
++    std::uint64_t rendered_chars  = 0;
+     std::size_t media_items       = 0;
+     std::uint64_t raw_patches     = 0;
+     std::uint64_t vision_tokens   = 0;
+diff --git a/src/targets/qwen3_8/impl/frontend/frontend.cpp b/src/targets/qwen3_8/impl/frontend/frontend.cpp
+index 47ca07a..31d4bc8 100644
+--- a/src/targets/qwen3_8/impl/frontend/frontend.cpp
++++ b/src/targets/qwen3_8/impl/frontend/frontend.cpp
+@@ -663,8 +663,15 @@ PreparedPrompt& PreparedPrompt::operator=(PreparedPrompt&&) noexcept = default;
+ 
+ PromptSummary PreparedPrompt::summary() const {
+     if (data_ == nullptr) { throw std::logic_error("prepared prompt is empty"); }
+-    return PromptSummary{.prompt_tokens = checked_token_count(data_->token_ids.size()),
+-                         .has_media     = data_->has_media()};
++    PromptSummary summary;
++    summary.prompt_tokens = checked_token_count(data_->token_ids.size());
++    summary.has_media     = data_->has_media();
++    summary.frontend.convert_seconds   = data_->prepare.convert_seconds;
++    summary.frontend.render_seconds    = data_->prepare.render_seconds;
++    summary.frontend.tokenize_seconds  = data_->prepare.tokenize_seconds;
++    summary.frontend.positions_seconds = data_->prepare.positions_seconds;
++    summary.frontend.rendered_chars    = data_->prepare.rendered_chars;
++    return summary;
+ }
+ 
+ double PreparedPrompt::prepare_seconds() const noexcept {
+@@ -868,10 +875,14 @@ PreparedPrompt Frontend::prepare(PromptInput input) const {
+         processor_options.max_prompt_tokens    = std::numeric_limits<std::size_t>::max();
+         fi::Processor processor(*impl_->tokenizer, impl_->chat_template, processor_options);
+         fi::ProcessedInput processed;
++        const auto processor_started = Clock::now();
+         try {
+             processed = processor.process(messages,
+                                           render_options(options, impl_->prefix_checkpoint_policy));
+         } catch (const fi::ProcessorError& error) { throw_processor_error(error); }
++        result.prepare.render_seconds =
++            std::chrono::duration<double>(Clock::now() - processor_started).count();
++        result.prepare.tokenize_seconds = -1.0;
+         result.token_ids.assign(processed.input_ids.begin(), processed.input_ids.end());
+         result.token_types = std::move(processed.token_types);
+         result.positions   = std::move(processed.positions);
+@@ -895,9 +906,19 @@ PreparedPrompt Frontend::prepare(PromptInput input) const {
+                 {static_cast<PromptCheckpointKind>(hint.kind), hint.boundary});
+         }
+     } else {
++        const auto converted = Clock::now();
++        result.prepare.convert_seconds =
++            std::chrono::duration<double>(converted - start).count();
+         const fi::RenderedChat rendered = impl_->chat_template.render(
+             messages, render_options(options, impl_->prefix_checkpoint_policy));
++        const auto rendered_at = Clock::now();
++        result.prepare.render_seconds =
++            std::chrono::duration<double>(rendered_at - converted).count();
++        result.prepare.rendered_chars = rendered.text.size();
+         fi::EncodedChat encoded = fi::encode_rendered_chat(*impl_->tokenizer, rendered);
++        const auto encoded_at = Clock::now();
++        result.prepare.tokenize_seconds =
++            std::chrono::duration<double>(encoded_at - rendered_at).count();
+         result.token_ids        = std::move(encoded.input_ids);
+         result.identity.stable_prefix_boundary = encoded.stable_prefix_boundary;
+         result.identity.turn_rewrite_boundary = encoded.turn_rewrite_boundary;
+@@ -908,6 +929,8 @@ PreparedPrompt Frontend::prepare(PromptInput input) const {
+                 {static_cast<PromptCheckpointKind>(hint.kind), hint.boundary});
+         }
+         assign_text_positions(result);
++        result.prepare.positions_seconds =
++            std::chrono::duration<double>(Clock::now() - encoded_at).count();
+     }
+     (void)checked_token_count(result.token_ids.size());
+     result.identity.reusable   = true;
+diff --git a/tests/test_request_log.cpp b/tests/test_request_log.cpp
+index 7a45b86..f7b3ac7 100644
+--- a/tests/test_request_log.cpp
++++ b/tests/test_request_log.cpp
+@@ -261,6 +261,8 @@ int main() {
+     outcome.completion_tokens                   = 1024;
+     outcome.finish_reason                       = ninfer::FinishReason::OutputLimit;
+     outcome.metrics.prepare_seconds             = 0.1234567890123;
++    outcome.metrics.prepare_tokenize_seconds    = 0.09;
++    outcome.metrics.prepare_render_seconds      = 0.02;
+     outcome.metrics.ttft_seconds                = 0.3580246791357;
+     outcome.metrics.vision_seconds              = 0.0;
+     outcome.metrics.prefill_seconds             = 0.2345678901234;
+@@ -328,6 +330,10 @@ int main() {
+     failures += check(done.at("continuation_cache").at("restore_failure") ==
+                           "kv_reservation_exhausted",
+                       "restore failure must be attributed, not discarded");
++    failures += check(done.at("prepare_detail").at("tokenize").get<double>() == 0.09 &&
++                          done.at("prepare_detail").at("template_render").get<double>() == 0.02 &&
++                          done.at("result").contains("prepare_tokens_per_s"),
++                      "prepare_detail tokenize/render split missing");
+     failures += check(done.at("timings_seconds").at("queue").get<double>() ==
+                               outcome.metrics.queue_seconds &&
+                           done.at("timings_seconds").at("restore").get<double>() ==
