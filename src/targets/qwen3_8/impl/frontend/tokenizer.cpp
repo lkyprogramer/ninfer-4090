@@ -637,14 +637,28 @@ Tokenizer::Tokenizer(TokenizerResources resources) {
     bpe_merge_ranks_        = load_bpe_merge_ranks(model, tokenizer_label);
     has_bpe_merges_         = true;
     default_stop_token_ids_ = load_default_stop_token_ids(resources.generation_config_json);
+    build_added_token_index();
+}
+
+void Tokenizer::build_added_token_index() {
+    for (std::vector<std::size_t>& bucket : added_token_indices_) { bucket.clear(); }
+    for (std::size_t j = 0; j < added_tokens_.size(); ++j) {
+        const std::string& content = added_tokens_[j].content;
+        added_token_indices_[static_cast<unsigned char>(content.front())].push_back(j);
+    }
 }
 
 std::vector<int> Tokenizer::encode(std::string_view text, EncodeOptions options) const {
-    return encode(text, options, nullptr);
+    return encode_impl(text, options, nullptr);
 }
 
 std::vector<int> Tokenizer::encode(std::string_view text, EncodeOptions options,
                                    TokenizerWork* work) const {
+    return encode_impl(text, options, work);
+}
+
+std::vector<int> Tokenizer::encode_impl(std::string_view text, EncodeOptions options,
+                                        TokenizerWork* work) const {
     if (text.empty()) { return {}; }
     if (!options.parse_added_tokens) {
         std::vector<int> ids;
@@ -658,19 +672,20 @@ std::vector<int> Tokenizer::encode(std::string_view text, EncodeOptions options,
     while (pos < text.size()) {
         std::size_t match_pos         = std::string_view::npos;
         const AddedToken* match_token = nullptr;
-        for (const AddedToken& token : added_tokens_) {
-            if (token.content.empty()) { continue; }
-            if (work != nullptr) {
-                ++work->candidate_checks;
-                // One full-suffix find per added token. B0 replaces this counter.
-                work->scan_positions += static_cast<std::uint64_t>(text.size() - pos);
+        for (std::size_t i = pos; i < text.size(); ++i) {
+            if (work != nullptr) { ++work->scan_positions; }
+            const auto lead = static_cast<unsigned char>(text[i]);
+            for (const std::size_t index : added_token_indices_[lead]) {
+                const AddedToken& token = added_tokens_[index];
+                if (work != nullptr) { ++work->candidate_checks; }
+                if (token.content.size() <= text.size() - i &&
+                    text.compare(i, token.content.size(), token.content) == 0) {
+                    match_pos   = i;
+                    match_token = &token;
+                    break;
+                }
             }
-            const std::size_t found = text.find(token.content, pos);
-            if (found == std::string_view::npos) { continue; }
-            if (match_token == nullptr || found < match_pos) {
-                match_pos   = found;
-                match_token = &token;
-            }
+            if (match_token != nullptr) { break; }
         }
 
         if (match_token == nullptr) {

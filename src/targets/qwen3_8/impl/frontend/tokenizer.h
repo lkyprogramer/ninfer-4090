@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <span>
@@ -63,12 +64,18 @@ public:
     [[nodiscard]] bool has_exact_token_domain(std::size_t size) const noexcept;
 
 private:
+    void build_added_token_index();
+    std::vector<int> encode_impl(std::string_view text, EncodeOptions options,
+                                 TokenizerWork* work) const;
+
     std::vector<std::string> id_to_token_;
     std::vector<bool> valid_token_ids_;
     std::unordered_map<std::string, int> vocab_token_to_id_;
     std::unordered_map<std::string, int> bpe_merge_ranks_;
     bool has_bpe_merges_ = true;
     std::vector<AddedToken> added_tokens_;
+    // Indices into added_tokens_, grouped by first byte. Not pointers: copies stay valid.
+    std::array<std::vector<std::size_t>, 256> added_token_indices_{};
     std::vector<int> default_stop_token_ids_;
 };
 
