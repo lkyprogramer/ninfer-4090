@@ -117,6 +117,10 @@ ninfer_add_test(ninfer_qwen3_8_frontend_test
   SOURCES targets/qwen3_8/test_frontend.cpp
   NEEDS_SOURCE_DIR
   LIBRARIES ninfer_engine ninfer_core)
+ninfer_add_test(ninfer_qwen3_8_tokenizer_work_test
+  SOURCES targets/qwen3_8/test_tokenizer_work.cpp
+          ${PROJECT_SOURCE_DIR}/src/targets/qwen3_8/impl/frontend/tokenizer.cpp
+  LIBRARIES ninfer_text Threads::Threads)
 target_include_directories(ninfer_qwen3_8_frontend_test PRIVATE
   ${PROJECT_SOURCE_DIR}/src/targets/qwen3_8/export
   ${PROJECT_SOURCE_DIR}/src/targets/qwen3_8/impl)

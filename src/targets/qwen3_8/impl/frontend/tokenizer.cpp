@@ -597,6 +597,12 @@ void append_bpe_ids(std::vector<int>& ids, std::string_view text, bool has_bpe_m
     }
 }
 
+void note_ordinary(TokenizerWork* work, std::size_t bytes) {
+    if (work == nullptr || bytes == 0) { return; }
+    ++work->ordinary_segments;
+    work->ordinary_input_bytes += static_cast<std::uint64_t>(bytes);
+}
+
 } // namespace
 
 Tokenizer::Tokenizer(TokenizerResources resources) {
@@ -634,9 +640,15 @@ Tokenizer::Tokenizer(TokenizerResources resources) {
 }
 
 std::vector<int> Tokenizer::encode(std::string_view text, EncodeOptions options) const {
+    return encode(text, options, nullptr);
+}
+
+std::vector<int> Tokenizer::encode(std::string_view text, EncodeOptions options,
+                                   TokenizerWork* work) const {
     if (text.empty()) { return {}; }
     if (!options.parse_added_tokens) {
         std::vector<int> ids;
+        note_ordinary(work, text.size());
         append_bpe_ids(ids, text, has_bpe_merges_, bpe_merge_ranks_, vocab_token_to_id_);
         return ids;
     }
@@ -648,6 +660,11 @@ std::vector<int> Tokenizer::encode(std::string_view text, EncodeOptions options)
         const AddedToken* match_token = nullptr;
         for (const AddedToken& token : added_tokens_) {
             if (token.content.empty()) { continue; }
+            if (work != nullptr) {
+                ++work->candidate_checks;
+                // One full-suffix find per added token. B0 replaces this counter.
+                work->scan_positions += static_cast<std::uint64_t>(text.size() - pos);
+            }
             const std::size_t found = text.find(token.content, pos);
             if (found == std::string_view::npos) { continue; }
             if (match_token == nullptr || found < match_pos) {
@@ -657,16 +674,19 @@ std::vector<int> Tokenizer::encode(std::string_view text, EncodeOptions options)
         }
 
         if (match_token == nullptr) {
+            note_ordinary(work, text.size() - pos);
             append_bpe_ids(ids, text.substr(pos), has_bpe_merges_, bpe_merge_ranks_,
                            vocab_token_to_id_);
             break;
         }
         if (match_pos > pos) {
+            note_ordinary(work, match_pos - pos);
             append_bpe_ids(ids, text.substr(pos, match_pos - pos), has_bpe_merges_,
                            bpe_merge_ranks_, vocab_token_to_id_);
         }
 
         ids.push_back(match_token->id);
+        if (work != nullptr) { ++work->selected_added_tokens; }
         pos = match_pos + match_token->content.size();
     }
     return ids;

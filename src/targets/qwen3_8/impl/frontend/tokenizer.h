@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <span>
 #include <string>
 #include <string_view>
@@ -11,6 +12,15 @@ namespace ninfer::targets::qwen3_8::frontend_internal {
 
 struct EncodeOptions {
     bool parse_added_tokens = true;
+};
+
+// Caller-owned, one encode accumulation. A null pointer disables counting.
+struct TokenizerWork {
+    std::uint64_t scan_positions         = 0;
+    std::uint64_t candidate_checks       = 0;
+    std::uint64_t selected_added_tokens  = 0;
+    std::uint64_t ordinary_segments      = 0;
+    std::uint64_t ordinary_input_bytes   = 0;
 };
 
 struct DecodeOptions {
@@ -39,6 +49,8 @@ public:
     explicit Tokenizer(TokenizerResources resources);
 
     std::vector<int> encode(std::string_view text, EncodeOptions options = {}) const;
+    std::vector<int> encode(std::string_view text, EncodeOptions options,
+                            TokenizerWork* work) const;
     std::string decode(std::span<const int> ids, DecodeOptions options = {}) const;
     std::string decode_token_bytes(int id, bool skip_special_tokens = false) const;
 
