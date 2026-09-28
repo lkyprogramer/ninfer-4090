@@ -121,6 +121,24 @@ ninfer_add_test(ninfer_qwen3_8_tokenizer_work_test
   SOURCES targets/qwen3_8/test_tokenizer_work.cpp
           ${PROJECT_SOURCE_DIR}/src/targets/qwen3_8/impl/frontend/tokenizer.cpp
   LIBRARIES ninfer_text Threads::Threads)
+ninfer_add_test(ninfer_qwen3_8_legacy_oracle_test
+  SOURCES targets/qwen3_8/test_legacy_oracle.cpp
+          targets/qwen3_8/reference/legacy_tokenizer.cpp
+          targets/qwen3_8/reference/legacy_encode_rendered_chat.cpp
+  LIBRARIES ninfer_text)
+add_executable(ninfer_qwen3_8_legacy_frontend_oracle
+  targets/qwen3_8/legacy_oracle_main.cpp
+  targets/qwen3_8/reference/legacy_tokenizer.cpp
+  targets/qwen3_8/reference/legacy_encode_rendered_chat.cpp
+  ${PROJECT_SOURCE_DIR}/src/artifact/sha256.cpp)
+target_include_directories(ninfer_qwen3_8_legacy_frontend_oracle PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${PROJECT_SOURCE_DIR}/include
+  ${PROJECT_SOURCE_DIR}/src
+  ${PROJECT_SOURCE_DIR}/third_party
+  ${PROJECT_SOURCE_DIR}/third_party/utf8proc)
+target_link_libraries(ninfer_qwen3_8_legacy_frontend_oracle PRIVATE ninfer_text)
+target_compile_definitions(ninfer_qwen3_8_legacy_frontend_oracle PRIVATE UTF8PROC_STATIC)
 target_include_directories(ninfer_qwen3_8_frontend_test PRIVATE
   ${PROJECT_SOURCE_DIR}/src/targets/qwen3_8/export
   ${PROJECT_SOURCE_DIR}/src/targets/qwen3_8/impl)
