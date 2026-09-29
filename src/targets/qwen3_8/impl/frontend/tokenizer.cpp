@@ -649,16 +649,25 @@ void Tokenizer::build_added_token_index() {
 }
 
 std::vector<int> Tokenizer::encode(std::string_view text, EncodeOptions options) const {
-    return encode_impl(text, options, nullptr);
+    return encode_impl(text, options, nullptr, nullptr);
 }
 
 std::vector<int> Tokenizer::encode(std::string_view text, EncodeOptions options,
                                    TokenizerWork* work) const {
-    return encode_impl(text, options, work);
+    return encode_impl(text, options, nullptr, work);
+}
+
+TracedEncoding Tokenizer::encode_traced(std::string_view text, EncodeOptions options,
+                                        TokenizerWork* work) const {
+    TracedEncoding traced;
+    traced.token_ids = encode_impl(text, options, &traced.restarts, work);
+    return traced;
 }
 
 std::vector<int> Tokenizer::encode_impl(std::string_view text, EncodeOptions options,
+                                        std::vector<EncodingRestart>* trace,
                                         TokenizerWork* work) const {
+    if (trace != nullptr) { trace->push_back(EncodingRestart{0, 0}); }
     if (text.empty()) { return {}; }
     if (!options.parse_added_tokens) {
         std::vector<int> ids;
@@ -703,6 +712,7 @@ std::vector<int> Tokenizer::encode_impl(std::string_view text, EncodeOptions opt
         ids.push_back(match_token->id);
         if (work != nullptr) { ++work->selected_added_tokens; }
         pos = match_pos + match_token->content.size();
+        if (trace != nullptr) { trace->push_back(EncodingRestart{pos, ids.size()}); }
     }
     return ids;
 }

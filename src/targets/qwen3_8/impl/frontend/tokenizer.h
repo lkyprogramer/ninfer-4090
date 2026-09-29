@@ -24,6 +24,17 @@ struct TokenizerWork {
     std::uint64_t ordinary_input_bytes   = 0;
 };
 
+// End of one selected added token. Ordinary EOF is not a restart.
+struct EncodingRestart {
+    std::size_t byte_end  = 0;
+    std::size_t token_end = 0;
+};
+
+struct TracedEncoding {
+    std::vector<int> token_ids;
+    std::vector<EncodingRestart> restarts;
+};
+
 struct DecodeOptions {
     bool skip_special_tokens = false;
     std::vector<int> stop_token_ids;
@@ -52,6 +63,9 @@ public:
     std::vector<int> encode(std::string_view text, EncodeOptions options = {}) const;
     std::vector<int> encode(std::string_view text, EncodeOptions options,
                             TokenizerWork* work) const;
+    // Same scanner as encode. A null work pointer disables counting.
+    TracedEncoding encode_traced(std::string_view text, EncodeOptions options = {},
+                                 TokenizerWork* work = nullptr) const;
     std::string decode(std::span<const int> ids, DecodeOptions options = {}) const;
     std::string decode_token_bytes(int id, bool skip_special_tokens = false) const;
 
@@ -66,7 +80,7 @@ public:
 private:
     void build_added_token_index();
     std::vector<int> encode_impl(std::string_view text, EncodeOptions options,
-                                 TokenizerWork* work) const;
+                                 std::vector<EncodingRestart>* trace, TokenizerWork* work) const;
 
     std::vector<std::string> id_to_token_;
     std::vector<bool> valid_token_ids_;
