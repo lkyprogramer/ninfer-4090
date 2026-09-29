@@ -15,6 +15,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -534,31 +535,112 @@ std::span<const std::int32_t> ProcessedInput::position_axis(int axis) const {
         static_cast<std::size_t>(axis) * input_ids.size(), input_ids.size());
 }
 
+namespace {
+
+EncodingRestart last_restart_not_after(const std::vector<EncodingRestart>& trace,
+                                      std::size_t byte_offset) {
+    if (trace.empty() || trace.front().byte_end != 0 || trace.front().token_end != 0) {
+        throw std::logic_error("encoding restart trace is missing its initial point");
+    }
+    const auto it = std::upper_bound(
+        trace.begin(), trace.end(), byte_offset,
+        [](std::size_t offset, const EncodingRestart& restart) {
+            return offset < restart.byte_end;
+        });
+    if (it == trace.begin()) {
+        throw std::logic_error("encoding restart trace is missing its initial point");
+    }
+    return *std::prev(it);
+}
+
+void accumulate(TokenizerWork& total, const TokenizerWork& part) {
+    total.scan_positions += part.scan_positions;
+    total.candidate_checks += part.candidate_checks;
+    total.selected_added_tokens += part.selected_added_tokens;
+    total.ordinary_segments += part.ordinary_segments;
+    total.ordinary_input_bytes += part.ordinary_input_bytes;
+}
+
+struct LocalPrefixFacts {
+    bool independently_tokenizable = false;
+    std::size_t token_count        = 0;
+    bool matches_main_prefix       = false;
+};
+
+} // namespace
+
 EncodedChat encode_rendered_chat(const Tokenizer& tokenizer, const RenderedChat& rendered) {
     EncodedChat encoded;
-    encoded.input_ids = tokenizer.encode(rendered.text);
+    encoded.encoding_work.checkpoint_hints = rendered.checkpoint_hints.size();
+    encoded.encoding_work.main_input_bytes = rendered.text.size();
+    encoded.encoding_work.main_encode_calls = 1;
+    const TracedEncoding traced =
+        tokenizer.encode_traced(rendered.text, {}, &encoded.encoding_work.main_work);
+    encoded.input_ids = traced.token_ids;
+
+    std::unordered_map<std::size_t, LocalPrefixFacts> memo;
+    const auto facts_for = [&](std::size_t byte_offset) {
+        const auto found = memo.find(byte_offset);
+        if (found != memo.end()) {
+            ++encoded.encoding_work.memo_hits;
+            return found->second;
+        }
+        ++encoded.encoding_work.boundary_unique_offsets;
+        const EncodingRestart restart = last_restart_not_after(traced.restarts, byte_offset);
+        const std::size_t local_bytes = byte_offset - restart.byte_end;
+        ++encoded.encoding_work.local_encode_calls;
+        encoded.encoding_work.local_input_bytes += static_cast<std::uint64_t>(local_bytes);
+        if (local_bytes > encoded.encoding_work.local_max_bytes) {
+            encoded.encoding_work.local_max_bytes = static_cast<std::uint64_t>(local_bytes);
+        }
+
+        LocalPrefixFacts facts;
+        TokenizerWork local_work;
+        std::vector<int> local;
+        try {
+            local = tokenizer.encode(
+                std::string_view(rendered.text).substr(restart.byte_end, local_bytes), {},
+                &local_work);
+        } catch (const std::exception&) {
+            accumulate(encoded.encoding_work.local_work, local_work);
+            facts.independently_tokenizable = false;
+            const auto [it, inserted]       = memo.emplace(byte_offset, facts);
+            (void)inserted;
+            return it->second;
+        }
+        accumulate(encoded.encoding_work.local_work, local_work);
+        if (restart.token_end > std::numeric_limits<std::size_t>::max() - local.size()) {
+            throw std::overflow_error("token prefix length exceeds size_t");
+        }
+        facts.independently_tokenizable = true;
+        facts.token_count                = restart.token_end + local.size();
+        const bool room = restart.token_end <= encoded.input_ids.size() &&
+                          local.size() <= encoded.input_ids.size() - restart.token_end;
+        facts.matches_main_prefix =
+            room && std::equal(local.begin(), local.end(),
+                               encoded.input_ids.begin() +
+                                   static_cast<std::ptrdiff_t>(restart.token_end));
+        const auto [it, inserted] = memo.emplace(byte_offset, facts);
+        (void)inserted;
+        return it->second;
+    };
     const auto encode_boundary = [&](std::size_t byte_offset, bool allow_full_prompt,
                                      std::string_view name) {
+        ++encoded.encoding_work.boundary_queries;
         if (byte_offset > rendered.text.size()) {
             throw std::logic_error(std::string(name) + " byte offset exceeds rendered chat");
         }
-        // Tokenizers can merge across a byte cut. Re-tokenizing each prefix and comparing it
-        // against the complete encoding is what makes a byte frontier safe as model-state identity.
-        std::vector<int> prefix;
-        try {
-            prefix = tokenizer.encode(std::string_view(rendered.text).substr(0, byte_offset));
-        } catch (const std::exception&) {
+        // A byte frontier is safe only when its tokens are an exact prefix of the one main
+        // encoding. The local slice is the suffix after the last selected added token.
+        const LocalPrefixFacts facts = facts_for(byte_offset);
+        if (!facts.independently_tokenizable) {
             throw std::logic_error(std::string(name) + " cannot be tokenized independently");
         }
-        if (prefix.empty() || (!allow_full_prompt && prefix.size() >= encoded.input_ids.size()) ||
-            prefix.size() > encoded.input_ids.size() ||
-            !std::equal(prefix.begin(), prefix.end(), encoded.input_ids.begin())) {
-            throw std::logic_error(std::string(name) + " is not an exact token prefix");
-        }
-        if (prefix.size() > std::numeric_limits<std::uint32_t>::max()) {
-            throw std::overflow_error(std::string(name) + " token boundary exceeds uint32");
-        }
-        return static_cast<std::uint32_t>(prefix.size());
+        const bool exact = !(facts.token_count == 0 ||
+                             (!allow_full_prompt && facts.token_count >= encoded.input_ids.size()) ||
+                             facts.token_count > encoded.input_ids.size() ||
+                             !facts.matches_main_prefix);
+        return enforce_exact_token_prefix(exact, facts.token_count, name);
     };
     if (rendered.stable_prefix_byte_offset) {
         encoded.stable_prefix_boundary =
@@ -653,7 +735,8 @@ ProcessedInput Processor::process(const std::vector<ChatMessage>& messages,
 
     rendered                     = expand_placeholders(std::move(rendered), items);
     EncodedChat encoded          = encode_rendered_chat(tokenizer_, rendered);
-    output.input_ids             = std::move(encoded.input_ids);
+    output.input_ids              = std::move(encoded.input_ids);
+    output.encoding_work          = std::move(encoded.encoding_work);
     output.stable_prefix_boundary = encoded.stable_prefix_boundary;
     output.turn_rewrite_boundary = encoded.turn_rewrite_boundary;
     output.user_turn_boundary    = encoded.user_turn_boundary;

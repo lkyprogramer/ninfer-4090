@@ -131,6 +131,15 @@ ninfer_add_test(ninfer_qwen3_8_encoding_restart_test
           targets/qwen3_8/reference/legacy_tokenizer.cpp
           ${PROJECT_SOURCE_DIR}/src/targets/qwen3_8/impl/frontend/tokenizer.cpp
   LIBRARIES ninfer_text Threads::Threads)
+ninfer_add_test(ninfer_qwen3_8_boundary_encoding_test
+  SOURCES targets/qwen3_8/test_boundary_encoding.cpp
+          targets/qwen3_8/reference/legacy_tokenizer.cpp
+          targets/qwen3_8/reference/legacy_encode_rendered_chat.cpp
+          ${PROJECT_SOURCE_DIR}/src/targets/qwen3_8/impl/frontend/tokenizer.cpp
+          ${PROJECT_SOURCE_DIR}/src/targets/qwen3_8/impl/frontend/processor.cpp
+          ${PROJECT_SOURCE_DIR}/src/targets/qwen3_8/impl/frontend/chat_template.cpp
+          ${PROJECT_SOURCE_DIR}/src/targets/qwen3_8/impl/frontend/digest.cpp
+  LIBRARIES ninfer_text Threads::Threads)
 set_tests_properties(ninfer_qwen3_8_tokenization_equivalence_test PROPERTIES SKIP_RETURN_CODE 77)
 ninfer_add_test(ninfer_qwen3_8_legacy_oracle_test
   SOURCES targets/qwen3_8/test_legacy_oracle.cpp

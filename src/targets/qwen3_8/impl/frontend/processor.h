@@ -6,10 +6,12 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <span>
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -87,6 +89,21 @@ struct ProcessorOptions {
     int video_max_frames                   = 768;
 };
 
+// Request-local boundary accounting. It is not part of prompt identity.
+struct BoundaryEncodingWork {
+    std::uint64_t main_encode_calls       = 0;
+    std::uint64_t main_input_bytes        = 0;
+    std::uint64_t checkpoint_hints        = 0;
+    std::uint64_t boundary_queries        = 0;
+    std::uint64_t boundary_unique_offsets = 0;
+    std::uint64_t local_encode_calls      = 0;
+    std::uint64_t local_input_bytes       = 0;
+    std::uint64_t local_max_bytes         = 0;
+    std::uint64_t memo_hits               = 0;
+    TokenizerWork main_work;
+    TokenizerWork local_work;
+};
+
 struct ProcessedInput {
     std::vector<int> input_ids;
     std::vector<std::uint8_t> token_types;
@@ -105,6 +122,7 @@ struct ProcessedInput {
     };
     std::vector<CheckpointHint> checkpoint_hints;
     PreprocessStats stats;
+    BoundaryEncodingWork encoding_work;
 
     [[nodiscard]] std::span<const std::int32_t> position_axis(int axis) const;
 };
@@ -115,7 +133,18 @@ struct EncodedChat {
     std::optional<std::uint32_t> turn_rewrite_boundary;
     std::optional<std::uint32_t> user_turn_boundary;
     std::vector<ProcessedInput::CheckpointHint> checkpoint_hints;
+    BoundaryEncodingWork encoding_work;
 };
+
+// Exact-prefix rejection stays ahead of the uint32 overflow check.
+[[nodiscard]] inline std::uint32_t enforce_exact_token_prefix(bool exact, std::size_t prefix_size,
+                                                              std::string_view name) {
+    if (!exact) { throw std::logic_error(std::string(name) + " is not an exact token prefix"); }
+    if (prefix_size > std::numeric_limits<std::uint32_t>::max()) {
+        throw std::overflow_error(std::string(name) + " token boundary exceeds uint32");
+    }
+    return static_cast<std::uint32_t>(prefix_size);
+}
 
 void adjust_rendered_boundaries_for_replacement(RenderedChat& rendered, std::size_t position,
                                                 std::size_t needle_size,
