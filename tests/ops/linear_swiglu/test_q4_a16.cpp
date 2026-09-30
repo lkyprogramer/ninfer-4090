@@ -17,6 +17,7 @@ int main() {
         const int failures = run_profile(
             "LinearSwiGLU Q4_A16",
             {QType::Q4G64_F16S, 34816, 5120, 17408, 1401U, ActivationCompute::A16}, kTokenCases);
+        if (failures == 77) { return 77; }
         std::cout << (failures == 0 ? "OK" : "FAIL") << " LinearSwiGLU Q4_A16 correctness\n";
         return failures == 0 ? 0 : 1;
     } catch (const std::exception& error) {
