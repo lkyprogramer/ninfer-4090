@@ -159,6 +159,24 @@ target_include_directories(ninfer_qwen3_8_legacy_frontend_oracle PRIVATE
   ${PROJECT_SOURCE_DIR}/third_party/utf8proc)
 target_link_libraries(ninfer_qwen3_8_legacy_frontend_oracle PRIVATE ninfer_text)
 target_compile_definitions(ninfer_qwen3_8_legacy_frontend_oracle PRIVATE UTF8PROC_STATIC)
+# G1 differential driver. Not a ctest: the 20k runs need an explicit case file.
+add_executable(ninfer_qwen3_8_g1_diff
+  targets/qwen3_8/g1_diff_main.cpp
+  targets/qwen3_8/reference/legacy_tokenizer.cpp
+  targets/qwen3_8/reference/legacy_encode_rendered_chat.cpp
+  ${PROJECT_SOURCE_DIR}/src/targets/qwen3_8/impl/frontend/tokenizer.cpp
+  ${PROJECT_SOURCE_DIR}/src/targets/qwen3_8/impl/frontend/processor.cpp
+  ${PROJECT_SOURCE_DIR}/src/targets/qwen3_8/impl/frontend/chat_template.cpp
+  ${PROJECT_SOURCE_DIR}/src/targets/qwen3_8/impl/frontend/digest.cpp
+  ${PROJECT_SOURCE_DIR}/src/artifact/sha256.cpp)
+target_include_directories(ninfer_qwen3_8_g1_diff PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${PROJECT_SOURCE_DIR}/include
+  ${PROJECT_SOURCE_DIR}/src
+  ${PROJECT_SOURCE_DIR}/third_party
+  ${PROJECT_SOURCE_DIR}/third_party/utf8proc)
+target_link_libraries(ninfer_qwen3_8_g1_diff PRIVATE ninfer_text Threads::Threads)
+target_compile_definitions(ninfer_qwen3_8_g1_diff PRIVATE UTF8PROC_STATIC)
 target_include_directories(ninfer_qwen3_8_frontend_test PRIVATE
   ${PROJECT_SOURCE_DIR}/src/targets/qwen3_8/export
   ${PROJECT_SOURCE_DIR}/src/targets/qwen3_8/impl)
