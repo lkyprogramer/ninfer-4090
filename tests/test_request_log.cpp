@@ -261,6 +261,8 @@ int main() {
     outcome.completion_tokens                   = 1024;
     outcome.finish_reason                       = ninfer::FinishReason::OutputLimit;
     outcome.metrics.prepare_seconds             = 0.1234567890123;
+    outcome.metrics.prepare_tokenize_seconds    = 0.09;
+    outcome.metrics.prepare_render_seconds      = 0.02;
     outcome.metrics.ttft_seconds                = 0.3580246791357;
     outcome.metrics.vision_seconds              = 0.0;
     outcome.metrics.prefill_seconds             = 0.2345678901234;
@@ -328,6 +330,10 @@ int main() {
     failures += check(done.at("continuation_cache").at("restore_failure") ==
                           "kv_reservation_exhausted",
                       "restore failure must be attributed, not discarded");
+    failures += check(done.at("prepare_detail").at("tokenize").get<double>() == 0.09 &&
+                          done.at("prepare_detail").at("template_render").get<double>() == 0.02 &&
+                          done.at("result").contains("prepare_tokens_per_s"),
+                      "prepare_detail tokenize/render split missing");
     failures += check(done.at("timings_seconds").at("queue").get<double>() ==
                               outcome.metrics.queue_seconds &&
                           done.at("timings_seconds").at("restore").get<double>() ==

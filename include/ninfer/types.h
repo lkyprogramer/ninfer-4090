@@ -403,9 +403,20 @@ private:
     RequestErrorKind kind_;
 };
 
+// Frontend::prepare sub-timers. Text chat fills all of them. Vision leaves tokenize_seconds
+// negative and folds processor time into render_seconds.
+struct FrontendPrepareTiming {
+    double convert_seconds   = 0.0;
+    double render_seconds    = 0.0;
+    double tokenize_seconds  = 0.0;
+    double positions_seconds = 0.0;
+    std::uint64_t rendered_chars = 0;
+};
+
 struct PromptSummary {
     std::uint32_t prompt_tokens = 0;
     bool has_media              = false;
+    FrontendPrepareTiming frontend;
 };
 
 enum class FinishReason : std::uint8_t {

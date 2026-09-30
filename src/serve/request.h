@@ -187,6 +187,9 @@ struct GenerationRequest {
     bool max_tokens_set = false;
     bool stream         = false;
     bool include_usage  = false;
+    // Raw HTTP body size, set by the server before prepare. 0 when the request did not come
+    // from an HTTP body (tests, token-count helpers).
+    std::uint64_t body_bytes = 0;
     std::optional<bool> enable_thinking; // non-standard extension; falls back to server default
     std::optional<RequestedReasoningEffort> reasoning_effort;
     std::string reasoning_effort_param = "reasoning_effort";

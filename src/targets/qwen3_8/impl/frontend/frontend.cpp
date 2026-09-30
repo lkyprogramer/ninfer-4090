@@ -663,8 +663,15 @@ PreparedPrompt& PreparedPrompt::operator=(PreparedPrompt&&) noexcept = default;
 
 PromptSummary PreparedPrompt::summary() const {
     if (data_ == nullptr) { throw std::logic_error("prepared prompt is empty"); }
-    return PromptSummary{.prompt_tokens = checked_token_count(data_->token_ids.size()),
-                         .has_media     = data_->has_media()};
+    PromptSummary summary;
+    summary.prompt_tokens = checked_token_count(data_->token_ids.size());
+    summary.has_media     = data_->has_media();
+    summary.frontend.convert_seconds   = data_->prepare.convert_seconds;
+    summary.frontend.render_seconds    = data_->prepare.render_seconds;
+    summary.frontend.tokenize_seconds  = data_->prepare.tokenize_seconds;
+    summary.frontend.positions_seconds = data_->prepare.positions_seconds;
+    summary.frontend.rendered_chars    = data_->prepare.rendered_chars;
+    return summary;
 }
 
 double PreparedPrompt::prepare_seconds() const noexcept {
@@ -868,10 +875,14 @@ PreparedPrompt Frontend::prepare(PromptInput input) const {
         processor_options.max_prompt_tokens    = std::numeric_limits<std::size_t>::max();
         fi::Processor processor(*impl_->tokenizer, impl_->chat_template, processor_options);
         fi::ProcessedInput processed;
+        const auto processor_started = Clock::now();
         try {
             processed = processor.process(messages,
                                           render_options(options, impl_->prefix_checkpoint_policy));
         } catch (const fi::ProcessorError& error) { throw_processor_error(error); }
+        result.prepare.render_seconds =
+            std::chrono::duration<double>(Clock::now() - processor_started).count();
+        result.prepare.tokenize_seconds = -1.0;
         result.token_ids.assign(processed.input_ids.begin(), processed.input_ids.end());
         result.token_types = std::move(processed.token_types);
         result.positions   = std::move(processed.positions);
@@ -895,9 +906,19 @@ PreparedPrompt Frontend::prepare(PromptInput input) const {
                 {static_cast<PromptCheckpointKind>(hint.kind), hint.boundary});
         }
     } else {
+        const auto converted = Clock::now();
+        result.prepare.convert_seconds =
+            std::chrono::duration<double>(converted - start).count();
         const fi::RenderedChat rendered = impl_->chat_template.render(
             messages, render_options(options, impl_->prefix_checkpoint_policy));
+        const auto rendered_at = Clock::now();
+        result.prepare.render_seconds =
+            std::chrono::duration<double>(rendered_at - converted).count();
+        result.prepare.rendered_chars = rendered.text.size();
         fi::EncodedChat encoded = fi::encode_rendered_chat(*impl_->tokenizer, rendered);
+        const auto encoded_at = Clock::now();
+        result.prepare.tokenize_seconds =
+            std::chrono::duration<double>(encoded_at - rendered_at).count();
         result.token_ids        = std::move(encoded.input_ids);
         result.identity.stable_prefix_boundary = encoded.stable_prefix_boundary;
         result.identity.turn_rewrite_boundary = encoded.turn_rewrite_boundary;
@@ -908,6 +929,8 @@ PreparedPrompt Frontend::prepare(PromptInput input) const {
                 {static_cast<PromptCheckpointKind>(hint.kind), hint.boundary});
         }
         assign_text_positions(result);
+        result.prepare.positions_seconds =
+            std::chrono::duration<double>(Clock::now() - encoded_at).count();
     }
     (void)checked_token_count(result.token_ids.size());
     result.identity.reusable   = true;

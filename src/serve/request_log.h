@@ -17,7 +17,7 @@
 
 namespace ninfer::serve {
 
-inline constexpr int kRequestLogSchemaVersion = 19;
+inline constexpr int kRequestLogSchemaVersion = 20;
 inline constexpr const char* kRequestLogArtifactType = "ninfer_serve_request_log";
 
 struct RequestLogContext {
@@ -28,6 +28,10 @@ struct RequestLogContext {
     bool stream                             = false;
     int prompt_tokens                       = 0;
     std::size_t message_count               = 0;
+    std::uint64_t content_chars             = 0;
+    std::uint64_t max_message_chars         = 0;
+    std::uint64_t rendered_chars            = 0;
+    std::uint64_t body_bytes                = 0;
     int requested_output_tokens             = 0;
     bool requested_output_tokens_client_set = false;
     std::size_t tool_count                  = 0;

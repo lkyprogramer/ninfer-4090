@@ -193,8 +193,9 @@ void HttpServer::handle_responses(const httplib::Request& req, httplib::Response
         limits.default_max_tokens = options_.default_max_tokens;
         Json body                 = parse_json_body(req);
         resolve_response_item_references(body, response_store_);
-        request                   = parse_responses_request(body, limits);
-        request.generation.adapter = require_model(request.generation.model);
+        request                     = parse_responses_request(body, limits);
+        request.generation.body_bytes = req.body.size();
+        request.generation.adapter  = require_model(request.generation.model);
         if (request.previous_response_id) {
             const std::shared_ptr<const StoredResponse> previous =
                 response_store_.get(*request.previous_response_id);

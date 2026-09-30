@@ -24,6 +24,13 @@ struct MediaInputCapacity;
 
 struct GenerationMetrics {
     double prepare_seconds = 0.0;
+    double prepare_serve_convert_seconds    = 0.0;
+    double prepare_frontend_convert_seconds = 0.0;
+    double prepare_render_seconds           = 0.0;
+    double prepare_tokenize_seconds         = 0.0;
+    double prepare_positions_seconds        = 0.0;
+    double prepare_submit_seconds           = 0.0;
+    std::uint64_t rendered_chars            = 0;
     double ttft_seconds    = 0.0;
     double vision_seconds  = 0.0;
     // Engine-side wait between submission and admission, and the continuation import that
@@ -76,6 +83,13 @@ struct PreparedRequest {
     ninfer::GenerationHandle generation;
     ninfer::ResolvedSamplingParameters sampling;
     double prepare_seconds                 = 0.0;
+    double prepare_serve_convert_seconds    = 0.0;
+    double prepare_frontend_convert_seconds = 0.0;
+    double prepare_render_seconds           = 0.0;
+    double prepare_tokenize_seconds         = 0.0;
+    double prepare_positions_seconds        = 0.0;
+    double prepare_submit_seconds           = 0.0;
+    std::uint64_t rendered_chars            = 0;
     int prompt_tokens                      = 0;
     bool include_usage                     = false;
     bool tool_capable                      = false;

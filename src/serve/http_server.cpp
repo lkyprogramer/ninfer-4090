@@ -1130,6 +1130,7 @@ void HttpServer::handle_chat_completions(const httplib::Request& req, httplib::R
         RequestLimits limits;
         limits.default_max_tokens = options_.default_max_tokens;
         request                   = parse_chat_completion_request(body, limits);
+        request.body_bytes        = req.body.size();
         request.adapter           = require_model(request.model);
         prepared                  = service_->prepare(
             request, [&req] { return req.is_connection_alive && !req.is_connection_alive(); });
@@ -1317,8 +1318,9 @@ void HttpServer::handle_messages(const httplib::Request& req, httplib::Response&
         // The Anthropic endpoint accepts any `model` string (Claude Code sends real
         // Claude model names) and echoes it back; it never 404s on model id. A string that
         // does name a served model still selects it, so adapters are reachable here too.
-        request         = parse_messages_request(body, limits);
-        request.adapter = resolve_model(request.model).value_or(std::string());
+        request            = parse_messages_request(body, limits);
+        request.body_bytes = req.body.size();
+        request.adapter    = resolve_model(request.model).value_or(std::string());
         prepared        = service_->prepare(
             request, [&req] { return req.is_connection_alive && !req.is_connection_alive(); });
     } catch (const ApiException& e) {

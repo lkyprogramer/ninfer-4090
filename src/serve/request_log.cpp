@@ -223,6 +223,10 @@ Json request_json(const RequestLogContext& context) {
                 {"model", context.model},
                 {"stream", context.stream},
                 {"message_count", context.message_count},
+                {"content_chars", context.content_chars},
+                {"max_message_chars", context.max_message_chars},
+                {"rendered_chars", context.rendered_chars},
+                {"body_bytes", context.body_bytes},
                 {"requested_output_tokens", context.requested_output_tokens},
                 {"requested_output_tokens_source",
                  context.requested_output_tokens_client_set ? "client" : "server_default"},
@@ -378,6 +382,17 @@ RequestLogContext make_request_log_context(std::uint64_t id, std::string x_reque
     context.stream                             = request.stream;
     context.prompt_tokens                      = prepared.prompt_tokens;
     context.message_count                      = request.messages.size();
+    context.body_bytes                         = request.body_bytes;
+    context.rendered_chars                     = prepared.rendered_chars;
+    for (const ChatTurn& turn : request.messages) {
+        std::uint64_t chars = turn.reasoning_content.size() + turn.tool_call_id.size();
+        for (const ContentPart& part : turn.content) { chars += part.text.size(); }
+        for (const ToolCall& call : turn.tool_calls) {
+            chars += call.name.size() + call.arguments_json.size();
+        }
+        context.content_chars += chars;
+        context.max_message_chars = std::max(context.max_message_chars, chars);
+    }
     context.requested_output_tokens            = request.max_tokens;
     context.requested_output_tokens_client_set = request.max_tokens_set;
     context.tool_count                         = request.tools.size();
@@ -681,7 +696,18 @@ std::string format_request_done_json(const std::string& server_instance_id, std:
                               static_cast<int>(outcome.metrics.prefix_cache_hit_tokens))},
              {"prefix_cache_hit_tokens", outcome.metrics.prefix_cache_hit_tokens},
              {"prefix_reuse_path", prefix_reuse_path_name(outcome.metrics.prefix_reuse_path)},
-             {"tool_call_count", outcome.tool_calls.size()}};
+             {"tool_call_count", outcome.tool_calls.size()},
+             {"prepare_tokens_per_s",
+              outcome.metrics.prepare_seconds > 0.0
+                  ? static_cast<double>(outcome.prompt_tokens) / outcome.metrics.prepare_seconds
+                  : 0.0}};
+    record["prepare_detail"] =
+        Json{{"serve_convert", outcome.metrics.prepare_serve_convert_seconds},
+             {"frontend_convert", outcome.metrics.prepare_frontend_convert_seconds},
+             {"template_render", outcome.metrics.prepare_render_seconds},
+             {"tokenize", outcome.metrics.prepare_tokenize_seconds},
+             {"positions_identity", outcome.metrics.prepare_positions_seconds},
+             {"engine_submit", outcome.metrics.prepare_submit_seconds}};
     // queue + restore + prefill decompose the engine-side part of ttft. prepare and vision are
     // frontend work that precedes submission.
     record["timings_seconds"] = Json{{"prepare", outcome.metrics.prepare_seconds},

@@ -384,19 +384,31 @@ PreparedRequest GenerationService::prepare(const GenerationRequest& request,
 
     try {
         std::size_t remaining_media_bytes = options_.max_request_bytes;
+        const auto convert_started        = Clock::now();
         ninfer::PromptInput input =
             to_prompt_input(request, semantics, [&](const ContentPart& part) {
                 return acquire_media(part, prepared.lifetime->deadline, is_cancelled,
                                      remaining_media_bytes);
             });
+        prepared.prepare_serve_convert_seconds =
+            std::chrono::duration<double>(Clock::now() - convert_started).count();
         check_preparation_control(prepared.lifetime->deadline, is_cancelled);
         ninfer::PreparedPrompt prompt = engine_->prepare(std::move(input));
         check_preparation_control(prepared.lifetime->deadline, is_cancelled);
-        prepared.prompt_tokens = static_cast<int>(prompt.summary().prompt_tokens);
-        prepared.prepare_seconds =
-            std::chrono::duration<double>(Clock::now() - prepared.lifetime->started).count();
+        const ninfer::PromptSummary summary = prompt.summary();
+        prepared.prompt_tokens = static_cast<int>(summary.prompt_tokens);
+        prepared.prepare_frontend_convert_seconds = summary.frontend.convert_seconds;
+        prepared.prepare_render_seconds           = summary.frontend.render_seconds;
+        prepared.prepare_tokenize_seconds         = summary.frontend.tokenize_seconds;
+        prepared.prepare_positions_seconds        = summary.frontend.positions_seconds;
+        prepared.rendered_chars                   = summary.frontend.rendered_chars;
+        const auto submit_started = Clock::now();
         prepared.generation = engine_->submit(std::move(prompt), std::move(request_options),
                                               prepared.lifetime->deadline, std::move(host_input));
+        prepared.prepare_submit_seconds =
+            std::chrono::duration<double>(Clock::now() - submit_started).count();
+        prepared.prepare_seconds =
+            std::chrono::duration<double>(Clock::now() - prepared.lifetime->started).count();
         prepared.sampling   = prepared.generation.resolved_sampling();
     } catch (const ApiException&) { throw; } catch (const ninfer::RequestError& exception) {
         throw_request_error(exception);
@@ -467,6 +479,13 @@ GenerationOutcome GenerationService::run(PreparedRequest& prepared, const Stream
     outcome.session_digest    = std::move(result.session_digest);
 
     outcome.metrics.prepare_seconds = prepared.prepare_seconds;
+    outcome.metrics.prepare_serve_convert_seconds    = prepared.prepare_serve_convert_seconds;
+    outcome.metrics.prepare_frontend_convert_seconds = prepared.prepare_frontend_convert_seconds;
+    outcome.metrics.prepare_render_seconds           = prepared.prepare_render_seconds;
+    outcome.metrics.prepare_tokenize_seconds         = prepared.prepare_tokenize_seconds;
+    outcome.metrics.prepare_positions_seconds        = prepared.prepare_positions_seconds;
+    outcome.metrics.prepare_submit_seconds           = prepared.prepare_submit_seconds;
+    outcome.metrics.rendered_chars                   = prepared.rendered_chars;
     outcome.metrics.ttft_seconds =
         prepared.prepare_seconds +
         std::max(0.0, result.timings.first_token_seconds - result.timings.prepare_seconds);
