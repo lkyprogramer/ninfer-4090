@@ -1,0 +1,43 @@
+# syntax=docker/dockerfile:1
+# No dashboard, no baked 17GiB model. Bind-mount qwen3_8_27b.ninfer at runtime.
+FROM nvidia/cuda:13.2.0-cudnn-devel-ubuntu24.04 AS build
+ARG DEBIAN_FRONTEND=noninteractive
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends \
+        ca-certificates cmake ninja-build pkg-config curl \
+        libavcodec-dev libavformat-dev libavutil-dev libswscale-dev \
+        libcurl4-openssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
+COPY CMakeLists.txt ./
+COPY apps/CMakeLists.txt apps/
+COPY apps/cli/ apps/cli/
+COPY apps/serve/ apps/serve/
+COPY include/ include/
+COPY src/ src/
+COPY third_party/ third_party/
+RUN cmake -S . -B /build -G Ninja \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DNINFER_BUILD_APPS=ON \
+        -DBUILD_TESTING=OFF \
+        -DNINFER_BUILD_BENCHMARKS=OFF \
+        -DNINFER_BUILD_QWEN3_8_27B=ON \
+        -DNINFER_BUILD_QWEN3_6_35B_A3B=OFF \
+    && cmake --build /build --parallel "$(nproc)" --target ninfer ninfer-serve \
+    && install -D /build/apps/ninfer /opt/ninfer/bin/ninfer \
+    && install -D /build/apps/ninfer-serve /opt/ninfer/bin/ninfer-serve
+
+FROM nvidia/cuda:13.2.0-cudnn-runtime-ubuntu24.04
+ARG DEBIAN_FRONTEND=noninteractive
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends \
+        ca-certificates curl \
+        libavcodec60 libavformat60 libavutil58 libswscale7 libcurl4t64 \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=build /opt/ninfer/bin/ninfer /usr/local/bin/ninfer
+COPY --from=build /opt/ninfer/bin/ninfer-serve /usr/local/bin/ninfer-serve
+WORKDIR /workspace
+EXPOSE 18030
+STOPSIGNAL SIGTERM
+# Model path and flags supplied by docker run.
+ENTRYPOINT ["ninfer-serve"]
